@@ -1,0 +1,244 @@
+# Bank Transaction Management Platform
+
+An educational intermediate-level backend project built with Java 21, Spring Boot, Spring Data JPA, MySQL and REST APIs. The application is split into three small services:
+
+- **Customer Service** — customer registration and management.
+- **Account Service** — bank account creation, balance management and account-to-account transfers.
+- **Transaction Service** — records deposits, withdrawals and transfers while requesting balance operations from Account Service.
+
+> **Learning project, not production banking software.** It does not implement authentication, authorization, regulatory controls, distributed transactions, fraud detection, or production-grade concurrency/idempotency. Do not use it with real customer data or money.
+
+## Technology stack
+
+- Java 21
+- Spring Boot 3.5.7
+- Spring Web (REST APIs)
+- Spring Data JPA / Hibernate
+- MySQL 8
+- Jakarta Bean Validation
+- Springdoc OpenAPI / Swagger UI
+- JUnit 5 and Mockito
+- Docker and Docker Compose
+- GitHub Actions (Maven build and tests)
+
+## Architecture
+
+```text
+                       REST clients (Postman / Swagger)
+                                   |
+              +--------------------+--------------------+
+              |                    |                    |
+       Customer Service      Account Service     Transaction Service
+          :8081                  :8082                 :8083
+              |                    |                    |
+          customer_db          account_db          transaction_db
+                                   ^                    |
+                                   +---- REST calls ----+
+```
+
+Each service owns its own database schema. Transaction Service calls Account Service over HTTP for balance operations and stores a transaction record. The balance update in Account Service is a local database transaction. The subsequent transaction-record update in Transaction Service is **not** part of the same distributed transaction; this is an intentional simplification for a student project.
+
+## Run locally (without Docker)
+
+Requirements: JDK 21 and MySQL 8.
+
+1. Create the databases in MySQL:
+
+   ```sql
+   CREATE DATABASE customer_db;
+   CREATE DATABASE account_db;
+   CREATE DATABASE transaction_db;
+   ```
+
+2. Set your MySQL username/password in environment variables, or use the local defaults only on your own machine:
+
+   - `DB_USERNAME` (default: `root`)
+   - `DB_PASSWORD` (default: empty)
+
+   Each service defaults to `localhost:3306` and its own database. You can override `DB_URL` if your MySQL uses another port.
+
+3. Open three terminals from the repository root and run:
+
+   ```bash
+   cd customer-service
+   ./mvnw spring-boot:run
+   ```
+
+   ```bash
+   cd account-service
+   ./mvnw spring-boot:run
+   ```
+
+   ```bash
+   cd transaction-service
+   ./mvnw spring-boot:run
+   ```
+
+   On Windows use `mvnw.cmd spring-boot:run` instead of `./mvnw`.
+
+4. The services use ports 8081, 8082 and 8083. Transaction Service calls Account Service at `http://localhost:8082` by default. Override `ACCOUNT_SERVICE_URL` if needed.
+
+## Run with Docker Compose
+
+From the repository root:
+
+```bash
+docker compose up --build
+```
+
+Compose starts MySQL and all three services. MySQL is exposed on host port **3307** to avoid colliding with a locally installed MySQL server. The services connect to the MySQL container internally on port 3306.
+
+To stop the application:
+
+```bash
+docker compose down
+```
+
+To also delete the local database volume (this permanently deletes the Compose database data):
+
+```bash
+docker compose down -v
+```
+
+## Swagger / API documentation
+
+Once a service is running:
+
+- Customer Service: http://localhost:8081/swagger-ui.html
+- Account Service: http://localhost:8082/swagger-ui.html
+- Transaction Service: http://localhost:8083/swagger-ui.html
+
+OpenAPI JSON is available at `/v3/api-docs` on each service.
+
+## Main API endpoints
+
+### Customer Service (`:8081`)
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| POST | `/customers` | Create a customer |
+| GET | `/customers` | List customers |
+| GET | `/customers/{id}` | Get one customer |
+| PUT | `/customers/{id}` | Update a customer |
+| DELETE | `/customers/{id}` | Delete a customer |
+
+Example request:
+
+```json
+{
+  "firstName": "Sara",
+  "lastName": "Amrani",
+  "cin": "AB123456",
+  "email": "sara@example.com",
+  "age": 22
+}
+```
+
+### Account Service (`:8082`)
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| POST | `/accounts` | Create an account |
+| GET | `/accounts` | List accounts |
+| GET | `/accounts/{id}` | Get an account |
+| GET | `/accounts/reference/{reference}` | Find by account reference |
+| POST | `/accounts/{id}/deposit` | Deposit (direct account API) |
+| POST | `/accounts/{id}/withdraw` | Withdraw (direct account API) |
+| POST | `/accounts/transfer` | Transfer between accounts |
+
+Example account request:
+
+```json
+{
+  "customerId": 1,
+  "accountType": "CHECKING",
+  "initialBalance": 1000.00
+}
+```
+
+Account references are generated by the application (for example `ACC-...`). They are demonstration identifiers, **not real Moroccan RIBs**. `customerId` is stored as a reference; Customer Service existence is not remotely verified in this learning version.
+
+### Transaction Service (`:8083`)
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| POST | `/transactions/deposit` | Record a deposit and request account balance update |
+| POST | `/transactions/withdraw` | Record a withdrawal and request account balance update |
+| POST | `/transactions/transfer` | Record a transfer and request account balance update |
+| GET | `/transactions` | List transaction records |
+| GET | `/transactions/{id}` | Get one transaction record |
+
+Deposit / withdrawal request:
+
+```json
+{
+  "accountId": 1,
+  "amount": 150.00,
+  "description": "Cash deposit"
+}
+```
+
+Transfer request:
+
+```json
+{
+  "sourceAccountId": 1,
+  "destinationAccountId": 2,
+  "amount": 75.00,
+  "description": "Transfer to savings"
+}
+```
+
+Transactions are stored with `PENDING`, `COMPLETED` or `FAILED` status. If Account Service rejects an operation, Transaction Service marks the record as failed and returns an error response.
+
+## Validation and error responses
+
+The services validate required fields, email format, minimum customer age and positive monetary amounts. Duplicate customer CIN/email and missing resources produce meaningful HTTP errors. Errors use a consistent JSON shape:
+
+```json
+{
+  "timestamp": "2026-01-01T12:00:00Z",
+  "status": 404,
+  "error": "Not Found",
+  "message": "Customer not found with id: 42",
+  "path": "/customers/42"
+}
+```
+
+## Tests
+
+Run the tests in each service directory:
+
+```bash
+./mvnw test
+```
+
+On Windows: `mvnw.cmd test`.
+
+The tests cover core service rules with JUnit and Mockito. They are not a substitute for end-to-end testing against a running MySQL instance.
+
+## Repository structure
+
+```text
+Bank-Transaction-Management-Platform/
+├── customer-service/
+├── account-service/
+├── transaction-service/
+├── database/init/                 # MySQL initialization for Docker Compose
+├── .github/workflows/              # CI build and test workflow
+├── docker-compose.yml
+└── README.md
+```
+
+## Next improvements
+
+- Add authentication and role-based authorization.
+- Add DTOs to separate API requests/responses from JPA entities.
+- Add integration tests using Testcontainers or a dedicated test database.
+- Add idempotency keys and stronger concurrency handling for money operations.
+- Add distributed transaction/outbox patterns if the project grows beyond this learning scope.
+- Add centralized logging and monitoring.
+
+## Author
+
+Dalal Nahi — Engineering student, Java / Spring Boot learning project.
